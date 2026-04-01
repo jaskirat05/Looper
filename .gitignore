@@ -1,0 +1,13 @@
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+
+judge/tribev2/sample/
+judge/tribev2/web_retention_output/
+judge/tribev2/tribe-home/
+judge/tribev2/cache/
+judge/tribev2/tribev2.egg-info/
+
+node_modules/
+.next/
