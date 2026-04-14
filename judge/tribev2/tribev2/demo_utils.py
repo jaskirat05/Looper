@@ -45,6 +45,49 @@ VALID_SUFFIXES: dict[str, set[str]] = {
     "video_path": {".mp4", ".avi", ".mkv", ".mov", ".webm"},
 }
 
+def _path_parts_to_scalar(parts: list[str]) -> str:
+    """Convert serialized pathlib path parts into a YAML-safe quoted string."""
+    cleaned_parts = [part for part in parts if part]
+    if not cleaned_parts:
+        path_value = ""
+    elif cleaned_parts[0] == "/":
+        path_value = "/" + "/".join(cleaned_parts[1:])
+    else:
+        path_value = "/".join(cleaned_parts)
+    return "'" + path_value.replace("'", "''") + "'"
+
+
+def _sanitize_config_yaml(yaml_text: str) -> str:
+    """Replace serialized pathlib objects with plain quoted strings."""
+    path_tags = (
+        "!!python/object/apply:pathlib.PosixPath",
+        "!!python/object/apply:pathlib.WindowsPath",
+        "!!python/object/apply:pathlib.PurePosixPath",
+        "!!python/object/apply:pathlib.PureWindowsPath",
+    )
+    lines = yaml_text.splitlines()
+    sanitized: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if any(tag in line for tag in path_tags):
+            prefix, _, _ = line.partition("!!python/object/apply:pathlib.")
+            parts: list[str] = []
+            j = i + 1
+            while j < len(lines):
+                stripped = lines[j].lstrip()
+                if not stripped.startswith("- "):
+                    break
+                parts.append(stripped[2:].strip().strip("'\""))
+                j += 1
+            scalar = _path_parts_to_scalar(parts)
+            sanitized.append(f"{prefix}{scalar}")
+            i = j
+            continue
+        sanitized.append(line)
+        i += 1
+    return "\n".join(sanitized) + "\n"
+
 
 def download_file(url: str, path: str | Path) -> Path:
     """Download a file from *url* and save it to *path*.
@@ -191,18 +234,20 @@ class TribeModel(TribeExperiment):
             Path(cache_folder).mkdir(parents=True, exist_ok=True)
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        checkpoint_dir = Path(checkpoint_dir)
-        if checkpoint_dir.exists():
-            config_path = checkpoint_dir / "config.yaml"
-            ckpt_path = checkpoint_dir / checkpoint_name
+        checkpoint_ref = str(checkpoint_dir)
+        local_checkpoint_dir = Path(checkpoint_ref)
+        if local_checkpoint_dir.exists():
+            config_path = local_checkpoint_dir / "config.yaml"
+            ckpt_path = local_checkpoint_dir / checkpoint_name
         else:
             from huggingface_hub import hf_hub_download
 
-            repo_id = str(checkpoint_dir)
+            repo_id = checkpoint_ref.replace("\\", "/")
             config_path = hf_hub_download(repo_id, "config.yaml")
             ckpt_path = hf_hub_download(repo_id, checkpoint_name)
         with open(config_path, "r") as f:
-            config = ConfDict(yaml.load(f, Loader=yaml.UnsafeLoader))
+            config_text = _sanitize_config_yaml(f.read())
+            config = ConfDict(yaml.load(config_text, Loader=yaml.UnsafeLoader))
         for modality in ["text", "audio", "video"]:
             config[f"data.{modality}_feature.infra.folder"] = cache_folder
             config[f"data.{modality}_feature.infra.cluster"] = cluster

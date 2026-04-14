@@ -1,0 +1,20 @@
+# Auto-detect text files and normalize line endings in Git.
+# This keeps the repo line-ending agnostic across platforms.
+* text=auto
+
+# Common binary assets (never modify line endings).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.mp4 binary
+*.webm binary
+*.npy binary
+*.pt binary
+*.ckpt binary
+*.zip binary
+*.gz binary
+*.tar binary

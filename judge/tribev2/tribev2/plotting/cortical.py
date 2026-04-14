@@ -17,7 +17,13 @@ from nilearn.plotting import plot_surf_roi, plot_surf_stat_map
 from tribev2.utils import get_hcp_roi_indices
 
 from .base import BasePlotBrain
-from .utils import get_cmap, get_scalar_mappable, robust_normalize, saturate_colors
+from .utils import (
+    convert_ax_to_3d,
+    get_cmap,
+    get_scalar_mappable,
+    robust_normalize,
+    saturate_colors,
+)
 
 VIEW_DICT = {
     "left": (0, 180),
@@ -38,6 +44,9 @@ VIEW_DICT = {
 class PlotBrainNilearn(BasePlotBrain):
 
     VIEW_DICT: tp.ClassVar[dict] = VIEW_DICT
+
+    def _convert_ax(self, ax):
+        return convert_ax_to_3d(ax)
 
     def get_fig_axes(self, views):
         if isinstance(views, str):

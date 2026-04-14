@@ -8,6 +8,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 LOGGER = logging.getLogger(__name__)
@@ -15,7 +16,12 @@ LOGGER = logging.getLogger(__name__)
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Open a URL with Patchright.")
-    parser.add_argument("url", help="URL to open")
+    parser.add_argument("url", nargs="?", help="URL to open")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        help="Local input video file to run TRIBE inference on directly",
+    )
     parser.add_argument(
         "--output-dir",
         default="web_retention_output",
@@ -51,19 +57,106 @@ def convert_to_mp4(source_path: Path, destination_path: Path) -> None:
     )
 
 
+def render_brain_video(preds, segments, output_path: Path) -> None:
+    import imageio_ffmpeg
+    import matplotlib.pyplot as plt
+    from tqdm import tqdm
+
+    from tribev2.plotting import PlotBrain
+    from tribev2.plotting.utils import get_clip, get_text, robust_normalize
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"{output_path.stem}_frames_", dir=output_path.parent))
+    plotter = PlotBrain(mesh="fsaverage5")
+    normalized_preds = robust_normalize(preds, percentile=99)
+    try:
+        for i in tqdm(range(len(normalized_preds)), desc="Plotting..."):
+            clip = get_clip(segments[i]) if segments else None
+            fig, axes = plt.subplots(
+                2,
+                1,
+                figsize=(3, 5),
+                gridspec_kw={"height_ratios": [1, 3]},
+            )
+            frame_ax, brain_ax = axes
+            if clip is not None:
+                img = clip.get_frame(0)
+                frame_ax.imshow(img)
+            else:
+                frame_ax.text(
+                    0.5,
+                    0.5,
+                    "No source frame",
+                    ha="center",
+                    va="center",
+                    fontsize=10,
+                )
+            frame_ax.axis("off")
+            frame = normalized_preds[i]
+            plotter.plot_surf(
+                frame,
+                axes=[brain_ax],
+                cmap="fire",
+                vmin=0.6,
+                alpha_cmap=(0, 0.2),
+            )
+            fig.suptitle(f"t = {i}s", fontsize=14, fontweight="bold")
+            if segments:
+                words = " ".join(get_text(segments[i]).split(" ")[-8:])
+                fig.text(0.1, 0.92, words, fontsize=9, ha="left", va="top")
+            fig.savefig(tmp_dir / f"tmp_{i:05d}.png", dpi=300)
+            plt.close(fig)
+            if clip is not None:
+                clip.close()
+
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-framerate",
+            "1",
+            "-i",
+            f"{str(tmp_dir)}/tmp_%05d.png",
+            "-vf",
+            "minterpolate=fps=12",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+        subprocess.run(cmd, check=True)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def run_tribev2_inference(video_path: Path, output_dir: Path) -> None:
-    from tribev2.demo_utils import TribeModel
+    CACHE_FOLDER = Path("./cache")
+    try:
+       from tribev2.demo_utils import TribeModel, download_file
+    except OSError as exc:
+        message = str(exc)
+        if "c10.dll" not in message and "torch" not in message.lower():
+            raise
+        raise RuntimeError(
+            "PyTorch failed to initialize on Windows while loading native DLLs. "
+            "This is an environment issue in the local torch install, not a TRIBE "
+            "inference error. Reinstall torch and torchvision in the active venv "
+            "and ensure the Microsoft Visual C++ Redistributable is installed "
+            "(vc_redist.x64)."
+        ) from exc
 
     def _run(device: str):
         model = TribeModel.from_pretrained(
-            "facebook/tribev2",
-            cache_folder=output_dir / "cache",
-            device=device,
-        )
+           "facebook/tribev2",
+            cache_folder=CACHE_FOLDER,
+            )
         df = model.get_events_dataframe(video_path=video_path)
         preds, segments = model.predict(events=df)
         return df, preds, segments
-
+  
     try:
         df, preds, segments = _run("auto")
     except RuntimeError as exc:
@@ -99,27 +192,19 @@ def run_tribev2_inference(video_path: Path, output_dir: Path) -> None:
         json.dumps(segment_rows, indent=2), encoding="utf-8"
     )
 
-    n_timesteps = min(6, len(preds))
+    n_timesteps = len(preds)
     if n_timesteps > 0:
         try:
-            from tribev2.plotting.cortical import PlotBrainNilearn
-            import matplotlib.pyplot as plt
+            import imageio_ffmpeg  # noqa: F401
         except ImportError as exc:
             LOGGER.warning("Skipping brain visualization because plotting dependencies are missing: %s", exc)
             return
 
-        plotter = PlotBrainNilearn(mesh="fsaverage5")
-        fig = plotter.plot_timesteps(
+        render_brain_video(
             preds[:n_timesteps],
-            segments=segments[:n_timesteps],
-            cmap="fire",
-            norm_percentile=99,
-            vmin=0.6,
-            alpha_cmap=(0, 0.2),
-            show_stimuli=True,
+            segments[:n_timesteps],
+            output_dir / "brain.mp4",
         )
-        fig.savefig(output_dir / "brain.png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
 
 
 async def open_url(url: str, output_dir: Path) -> None:
@@ -183,7 +268,20 @@ async def open_url(url: str, output_dir: Path) -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
     args = build_arg_parser().parse_args()
-    asyncio.run(open_url(args.url, Path(args.output_dir).resolve()))
+    output_dir = Path(args.output_dir).resolve()
+
+    if args.input is not None:
+        input_path = args.input.resolve()
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file does not exist: {input_path}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        run_tribev2_inference(input_path, output_dir)
+        return
+
+    if not args.url:
+        raise SystemExit("Either a URL or --input <file> is required.")
+
+    asyncio.run(open_url(args.url, output_dir))
 
 
 if __name__ == "__main__":

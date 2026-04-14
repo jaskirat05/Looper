@@ -379,9 +379,10 @@ class BasePlotBrain(pydantic.BaseModel):
         audio = get_audio(
             segments[0], stop_offset=(len(segments) - 1) * segments[0].duration
         )
-        soundarray = audio.to_soundarray().mean(axis=1)
-        axes[SOUND_KEY].plot(soundarray, color="k")
-        axes[SOUND_KEY].set_xlim(0, len(soundarray))
+        if audio is not None:
+            soundarray = audio.to_soundarray().mean(axis=1)
+            axes[SOUND_KEY].plot(soundarray, color="k")
+            axes[SOUND_KEY].set_xlim(0, len(soundarray))
         axes[SOUND_KEY].axis("off")
         axes[TEXT_KEY].axis("off")
         full_start, full_duration = (
@@ -392,24 +393,26 @@ class BasePlotBrain(pydantic.BaseModel):
         for i, segment in enumerate(segments):
             if f"{VIDEO_KEY}_0" in axes and i % plot_every_k_timesteps == 0:
                 ax_idx = i // plot_every_k_timesteps
-                img = get_clip(segment).get_frame(0)
-                margin = img.shape[1] * 0.0
+                clip = get_clip(segment)
                 ax = axes[f"{VIDEO_KEY}_{ax_idx}"]
-                im = ax.imshow(img)
-                patch = plt.matplotlib.patches.FancyBboxPatch(
-                    (0, 0),
-                    img.shape[1],
-                    img.shape[0],
-                    boxstyle="round,pad=0,rounding_size=200",
-                    transform=ax.transData,
-                    clip_on=False,
-                    facecolor="none",
-                    edgecolor="none",
-                )
-                ax.add_patch(patch)
-                im.set_clip_path(patch)
-                ax.set_xlim(-margin, img.shape[1] + margin)
-                ax.set_ylim(img.shape[0] + margin, -margin)
+                if clip is not None:
+                    img = clip.get_frame(0)
+                    margin = img.shape[1] * 0.0
+                    im = ax.imshow(img)
+                    patch = plt.matplotlib.patches.FancyBboxPatch(
+                        (0, 0),
+                        img.shape[1],
+                        img.shape[0],
+                        boxstyle="round,pad=0,rounding_size=200",
+                        transform=ax.transData,
+                        clip_on=False,
+                        facecolor="none",
+                        edgecolor="none",
+                    )
+                    ax.add_patch(patch)
+                    im.set_clip_path(patch)
+                    ax.set_xlim(-margin, img.shape[1] + margin)
+                    ax.set_ylim(img.shape[0] + margin, -margin)
                 ax.axis("off")
             events = segment.events
             words = events[events.type == "Word"]

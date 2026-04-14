@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import tempfile
 import typing as tp
 
@@ -157,8 +158,13 @@ class PlotBrainPyvista(BasePlotBrain):
                     annotated_rois,
                     **(annotated_rois_kwargs or {}),
                 )
-            with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
-                img = pl.screenshot(tmp.name, return_img=True)
+            fd, tmp_name = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            try:
+                img = pl.screenshot(tmp_name, return_img=True)
+            finally:
+                if os.path.exists(tmp_name):
+                    os.unlink(tmp_name)
             img = tight_crop(img, w_pad=self.w_pad, h_pad=self.h_pad)
             pl.clear()
             ax.axis("off")

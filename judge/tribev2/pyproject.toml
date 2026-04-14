@@ -39,6 +39,7 @@ Repository = "https://github.com/facebookresearch/tribev2"
 
 [project.scripts]
 tribev2-web-retention = "tribev2.web_retention:main"
+tribev2-web-screenshot = "tribev2.web_screenshot:main"
 
 [project.optional-dependencies]
   plotting = [
